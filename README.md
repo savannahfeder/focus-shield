@@ -51,37 +51,42 @@ client/    Chrome extension (React 19 + TS + Tailwind v4, Manifest V3)
   background/   service worker: tab interception, storage, alarms
   blocked/      the block page and its conversation UI
   options/      settings, history, reminders
-server/    Deno API (the bouncer). Deployed on Deno Deploy.
+  shared/       the bouncer: prompt, schema, OpenAI call
+server/    optional Deno API that runs the same bouncer
 dist/      build output, load this in Chrome
 ```
 
-The service worker watches tab navigation, matches the hostname against your lists, and redirects to a local block page. That page sends your reason plus page metadata and recent access history to the Deno server, which prompts a model on Groq and returns `{ valid, seconds, message, followUpQuestion }`. On approval the worker writes a temporary unblock and schedules a `chrome.alarms` re-block.
+The service worker watches tab navigation, matches the hostname against your lists, and redirects to a local block page. That page sends your reason plus page metadata and recent access history to the bouncer, which asks an OpenAI model (Responses API, strict JSON schema) and returns `{ valid, seconds, message, followUpQuestion }`. On approval the worker writes a temporary unblock and schedules a `chrome.alarms` re-block.
 
-No API key ships in the extension. The request carries the blocked URL, the page title and description, your typed reason, and the recent attempts for that site, so the bouncer has enough context to spot a pattern.
+The prompt and the answer's shape live in `client/src/shared/bouncer.ts`, used by both the extension and the server. The request carries the blocked URL, the page title and description, your typed reason, and the recent attempts for that site, so the bouncer has enough context to spot a pattern.
 
-## Quick start
+## Run it as your own (no server)
 
 ```bash
-# 1. Build the extension
+./scripts/build-local.sh    # key from $OPENAI_API_KEY or the macOS Keychain item OPENAI_API_KEY
+# chrome://extensions -> Developer mode -> Load unpacked -> select dist/
+```
+
+This build bakes your key into `dist/` and asks OpenAI straight from the extension. `dist/` is gitignored; never upload this build to the Chrome Web Store. `FOCUS_SHIELD_MODEL=gpt-5.5 ./scripts/build-local.sh` picks another model (default `gpt-5.4-mini`, about 1.5 s a decision). After pulling changes, run the script again and press reload on the extension.
+
+## Run it with the server
+
+A build without a key sends every decision to the server instead.
+
+```bash
 cd client && npm install && npm run build   # output goes to ../dist
 
-# 2. Run the bouncer
 cd ../server
-echo 'GROQ_API_KEY="your-key"' > .env       # get one at console.groq.com
+echo 'OPENAI_API_KEY="your-key"' > .env
 deno task dev                                # http://localhost:8000
-
-# 3. Load in Chrome
-# chrome://extensions -> Developer mode -> Load unpacked -> select dist/
 ```
 
 A dev build (`npm run dev`) points at `http://localhost:8000`; a production build points at the deployed server.
 
-### Server configuration
-
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `GROQ_API_KEY` | required | Groq API credentials |
-| `GROQ_MODEL` | `openai/gpt-oss-120b` | Swap models without a code change. Groq retires models periodically, which shows up as every request failing at once. |
+| `OPENAI_API_KEY` | required | OpenAI credentials |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Swap models without a code change |
 
 ### Release
 
@@ -92,4 +97,4 @@ A dev build (`npm run dev`) points at `http://localhost:8000`; a production buil
 ## Tech stack
 
 **Extension:** TypeScript, React 19, Tailwind CSS v4, Vite, Manifest V3 service worker.
-**Server:** Deno, Groq (`openai/gpt-oss-120b`), Zod for structured output, CORS-enabled REST.
+**Bouncer:** OpenAI Responses API with a strict JSON schema, called from the extension or from a small Deno server.

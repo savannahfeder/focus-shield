@@ -1,4 +1,5 @@
 import type { AccessAttemptOutcome } from '../../options/types';
+import { askOpenAI, DEFAULT_OPENAI_MODEL } from '../../shared/bouncer';
 
 export interface AIResponse {
   valid: boolean | null; // null = follow-up needed
@@ -28,6 +29,11 @@ export interface AccessAttempt {
 const VALIDATION_SERVICE_URL = import.meta.env.DEV
   ? 'http://localhost:8000/validate'
   : 'https://smart-blocker.moritzwa.deno.net/validate';
+// A local build (scripts/build-local.sh) bakes in the owner's OpenAI key and
+// asks OpenAI directly, so no server is involved.
+const OPENAI_API_KEY: string | undefined = import.meta.env.VITE_OPENAI_API_KEY;
+const OPENAI_MODEL: string =
+  import.meta.env.VITE_OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
 const REQUEST_TIMEOUT = 10000; // 10 seconds
 const MAX_RETRIES = 5; // Increased for serverless cold starts
 
@@ -59,6 +65,10 @@ export async function validateUnblockReason(
   siteMetadata?: SiteMetadata | null,
   accessHistory?: AccessAttempt[]
 ): Promise<AIResponse | { error: string }> {
+  if (OPENAI_API_KEY) {
+    return askOpenAIWithRetry(hostname, reason, conversationHistory, siteMetadata, accessHistory);
+  }
+
   let lastError: Error | null = null;
 
   // Retry logic
@@ -142,4 +152,36 @@ export async function validateUnblockReason(
   }
 
   return { error: errorMessage };
+}
+
+const OPENAI_ATTEMPTS = 2;
+
+async function askOpenAIWithRetry(
+  hostname: string,
+  reason: string,
+  conversationHistory: ConversationMessage[],
+  siteMetadata?: SiteMetadata | null,
+  accessHistory?: AccessAttempt[]
+): Promise<AIResponse | { error: string }> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= OPENAI_ATTEMPTS; attempt++) {
+    try {
+      const decision = await askOpenAI(
+        { hostname, reason, conversationHistory, siteMetadata, accessHistory },
+        { apiKey: OPENAI_API_KEY!, model: OPENAI_MODEL }
+      );
+      console.log(`✅ OpenAI (${OPENAI_MODEL}) decided:`, decision);
+      return decision;
+    } catch (error) {
+      lastError = error as Error;
+      console.log(`❌ OpenAI attempt ${attempt}/${OPENAI_ATTEMPTS}:`, lastError.message);
+      // A bad key or model will not fix itself on a second try.
+      if (/OpenAI returned (400|401|403|404)/.test(lastError.message)) break;
+      if (attempt < OPENAI_ATTEMPTS) await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  if (lastError?.name === 'AbortError') {
+    return { error: 'OpenAI took too long to answer. Please try again.' };
+  }
+  return { error: `OpenAI error: ${lastError?.message ?? 'unknown'}` };
 }

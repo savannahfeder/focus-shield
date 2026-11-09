@@ -2,31 +2,27 @@
 
 The AI bouncer that decides whether a blocked site gets unblocked, and for how long.
 
-## Tech stack
-
-- **Deno** - TypeScript runtime, deployed on Deno Deploy
-- **Groq** - `openai/gpt-oss-120b` via the OpenAI-compatible API
-- **Zod** - validates the model's JSON before it reaches the extension
-
 ## Setup
 
+The prompt, schema and OpenAI call are shared with the extension in `../client/src/shared/bouncer.ts`.
+
 ```bash
-echo 'GROQ_API_KEY="your-key"' > .env   # get one at console.groq.com
+echo 'OPENAI_API_KEY="your-key"' > .env
 deno task dev                            # http://localhost:8000
 ```
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `GROQ_API_KEY` | required | Groq credentials |
-| `GROQ_MODEL` | `openai/gpt-oss-120b` | Override the model without a code change |
+| `OPENAI_API_KEY` | required | OpenAI credentials |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | Override the model without a code change |
 
-Groq retires models periodically, and it presents as every request failing at once. If `/validate` starts returning 500s, check the `detail` field in the response body first: a `model_not_found` there means set `GROQ_MODEL` to a current model.
+If `/validate` starts returning 500s, check the `detail` field in the response body first: it carries OpenAI's own message.
 
 ## API
 
 ### GET /health
 
-Returns `{ "ok": true, "model": "openai/gpt-oss-120b" }`. Use it to confirm which model is live without sending a validation request.
+Returns `{ "ok": true, "model": "gpt-5.4-mini" }`. Use it to confirm which model is live without sending a validation request.
 
 ### POST /validate
 
